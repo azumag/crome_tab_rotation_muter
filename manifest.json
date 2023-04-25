@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Mute Inactive Tabs and Close Duplicates",
+  "version": "1.0",
+  "description": "Automatically mutes inactive tabs, keeps playing sound when switching to a different window, and closes duplicate tabs.",
+  "options_page": "options.html",
+  "permissions": [
+    "tabs",
+    "alarms",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "icons": {
+    "48": "icon.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png",
+    "default_title": "Auto Mute Inactive Tabs and Close Duplicates"
+  }
+}
