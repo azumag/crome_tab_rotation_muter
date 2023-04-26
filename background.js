@@ -25,16 +25,6 @@ async function switchTab() {
               let currentTabIndex = tabs.findIndex((tab) => tab.active);
               let nextTabIndex = (currentTabIndex + 1) % tabs.length;
 
-              // Close duplicate tabs
-              // let currentTab = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0])));
-              //  const currentTabUrl = currentTab.url;
-              //  for (let i = 0; i < tabs.length; i++) {
-              //    const tab = tabs[i];
-              //    if (tab.url === currentTabUrl && tab.id !== currentTab.id) {
-              //      chrome.tabs.remove(tab.id);
-              //    }
-              //  }
-
               chrome.tabs.update(tabs[currentTabIndex].id, { muted: true });
               chrome.tabs.update(tabs[nextTabIndex].id, { active: true, muted: false });
 
@@ -44,6 +34,17 @@ async function switchTab() {
 
               // check offline tab and close
               checkAndCloseOfflineTab(tabs[nextTabIndex]);
+
+              // Close duplicate tabs
+              const urls = tabs.map(tab => tab.url);
+              const uniqueUrls = [...new Set(urls)]; // Get unique URLs
+              if (urls.length !== uniqueUrls.length) { // If there are duplicate URLs
+                const tabsToRemove = tabs.filter((tab, index) => urls.indexOf(tab.url) !== index); // Get duplicate tabs
+                for (let i = 0; i < tabsToRemove.length; i++) {
+                  chrome.tabs.remove(tabsToRemove[i].id); // Remove duplicate tabs
+                }
+                tabs = tabs.filter(tab => urls.indexOf(tab.url) === urls.lastIndexOf(tab.url)); // Remove duplicate tabs from tabs array
+              }
             }
           });
         }
