@@ -189,6 +189,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       });
     }
   }
+  return true;
 });
 
 // // タブが閉じられたときにタイムアウトをクリアする
