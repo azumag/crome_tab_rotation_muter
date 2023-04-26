@@ -173,13 +173,19 @@ function checkAndCloseOfflineTab(tab) {
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.action === "openNewStream") {
     const url = message.value;
-    console.log(url);
+    console.log("openNew:", url);
     const targetWindowId = await new Promise((resolve) =>
       chrome.storage.sync.get('targetWindowId', ({ targetWindowId }) => resolve(targetWindowId))
     );
     if (targetWindowId) {
       console.log(targetWindowId);
-      chrome.tabs.create({ url: url, windowId: targetWindowId });
+      chrome.tabs.query({ url: url, windowId: targetWindowId }, (tabs) => {
+        if (tabs.length > 0) {
+          // nothing to do
+        } else {
+          chrome.tabs.create({ url: url, windowId: targetWindowId, active: false });
+        }
+      });
     }
   }
 });

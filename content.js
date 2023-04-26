@@ -7,8 +7,8 @@ function onDomMutation(mutationsList, observer) {
 
 			const links = document.querySelectorAll('a');
 			const watchLinks = Array.from(links).filter(link => link.textContent === '視聴');
-			watchLinks.forEach(url => {
-				chrome.runtime.sendMessage({ action: "openNewStream", value: url });
+			watchLinks.forEach(link => {
+				chrome.runtime.sendMessage({ action: "openNewStream", value: link.href });
 			});
 		}
 	}
