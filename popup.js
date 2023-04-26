@@ -33,4 +33,14 @@ const muteAllTabs = () => {
   });
 };
 
+const suspendAllTabs = () => {
+  chrome.tabs.query({ currentWindow: true }, (tabs) => {
+    tabs.forEach((tab) => {
+      const suspendedUrl = "chrome-extension://" + chrome.runtime.id + "/suspended.html#" + encodeURIComponent(tab.url);
+      chrome.tabs.update(tab.id, { url: suspendedUrl });
+    });
+  });
+};
+
 document.getElementById("muteAllTabsBtn").addEventListener("click", muteAllTabs);
+document.getElementById("suspendAllTabsBtn").addEventListener("click", suspendAllTabs);

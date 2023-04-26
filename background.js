@@ -22,21 +22,28 @@ async function switchTab() {
           // If the window exists, switch tabs
           chrome.tabs.query({ windowId: targetWindowId }, async (tabs) => {
             if (tabs.length > 1) {
-              let currentTab = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0])));
               let currentTabIndex = tabs.findIndex((tab) => tab.active);
               let nextTabIndex = (currentTabIndex + 1) % tabs.length;
 
-               // Close duplicate tabs
-               const currentTabUrl = currentTab.url;
-               for (let i = 0; i < tabs.length; i++) {
-                 const tab = tabs[i];
-                 if (tab.url === currentTabUrl && tab.id !== currentTab.id) {
-                   chrome.tabs.remove(tab.id);
-                 }
-               }
+              // Close duplicate tabs
+              // let currentTab = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0])));
+              //  const currentTabUrl = currentTab.url;
+              //  for (let i = 0; i < tabs.length; i++) {
+              //    const tab = tabs[i];
+              //    if (tab.url === currentTabUrl && tab.id !== currentTab.id) {
+              //      chrome.tabs.remove(tab.id);
+              //    }
+              //  }
 
               chrome.tabs.update(tabs[currentTabIndex].id, { muted: true });
               chrome.tabs.update(tabs[nextTabIndex].id, { active: true, muted: false });
+
+              // suspend previous tab
+              const suspendedUrl = "chrome-extension://" + chrome.runtime.id + "/suspended.html#" + encodeURIComponent(tabs[currentTabIndex].url);
+              chrome.tabs.update(tabs[currentTabIndex].id, { url: suspendedUrl });
+
+              // check offline tab and close
+              checkAndCloseOfflineTab(tabs[nextTabIndex]);
             }
           });
         }
@@ -80,12 +87,12 @@ function suspendTab(tab) {
 
 function clearSuspendTimeout(tabId) {
   clearTimeout(suspendTimeouts[tabId]);
-  suspendTimeouts[tabId] = null;
+  suspendTimeouts[tabId] = false;
 }
 
 // タブがアクティブになったときに再開する関数
 function resumeTab(tab) {
-  clearSuspendTimeout(tab.id)
+  // clearSuspendTimeout(tab.id)
   if (tab.url.startsWith("chrome-extension://" + chrome.runtime.id + "/suspended.html")) {
     const originalUrl = decodeURIComponent(tab.url.split("#")[1]);
     chrome.tabs.update(tab.id, { url: originalUrl });
@@ -97,25 +104,118 @@ chrome.tabs.onActivated.addListener(activeInfo => {
   chrome.tabs.get(activeInfo.tabId, resumeTab);
 
   // chrome.tabs.query({ active: false, currentWindow: true }, tabs => {
-  chrome.tabs.query({ active: false }, tabs => {
-    tabs.forEach(suspendTab);
+  // chrome.tabs.query({ active: false }, tabs => {
+  //   tabs.forEach(suspendTab);
+  // });
+});
+
+function getUserId(clientId, accessToken, username) {
+  const requestUrl = `https://api.twitch.tv/helix/users?login=${username}`;
+
+  return fetch(requestUrl, {
+    headers: {
+      "Client-ID": clientId,
+      "Authorization": `Bearer ${accessToken}`
+    }
+  })
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.data.length > 0) {
+        return data.data[0].id;
+      } else {
+        throw new Error("User not found");
+      }
+    })
+    .catch((error) => {
+      console.error("Error fetching user ID:", error);
+    });
+}
+
+function checkAndCloseOfflineTab(tab) {
+  if (!tab.url.includes("twitch")) {
+    return;
+  }
+  if (tab.url.includes("extension")) {
+    return;
+  }
+  const splittedUrl = tab.url.split("/");
+  const channelName = splittedUrl[splittedUrl.length - 1];
+
+  chrome.storage.sync.get(["clientId", "accessToken"], (settings) => {
+    const clientId = settings.clientId;
+    const accessToken = settings.accessToken;
+
+    getUserId(clientId, accessToken, channelName).then((userId) => {
+      const requestUrl = `https://api.twitch.tv/helix/streams?user_id=${userId}`;
+      fetch(requestUrl, {
+        headers: {
+          "Client-ID": clientId,
+          "Authorization": `Bearer ${accessToken}`
+        }
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          if (data.data.length > 0) {
+            // Stream is online
+          } else {
+            // offline
+            chrome.tabs.remove(tab.id);
+          }
+        })
+        .catch((error) => {
+          console.error("tabs;", tab.url);
+          console.error("Error fetching stream status:", error);
+        });
+    });
   });
-});
+}
 
-// タブが閉じられたときにタイムアウトをクリアする
-chrome.tabs.onRemoved.addListener(tabId => {
-  clearSuspendTimeout(tabId)
-});
-
-// タブが更新されたときにタイムアウトをクリアする
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === "complete") {
-    if (tab.active) {
-      resumeTab(tab);
-    } else {
-      suspendTab(tab);
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+  if (message.action === "openNewStream") {
+    const url = message.value;
+    console.log(url);
+    const targetWindowId = await new Promise((resolve) =>
+      chrome.storage.sync.get('targetWindowId', ({ targetWindowId }) => resolve(targetWindowId))
+    );
+    if (targetWindowId) {
+      console.log(targetWindowId);
+      chrome.tabs.create({ url: url, windowId: targetWindowId });
     }
   }
 });
 
+// // タブが閉じられたときにタイムアウトをクリアする
+// chrome.tabs.onRemoved.addListener(tabId => {
+//   clearSuspendTimeout(tabId)
+// });
+
+// // タブが更新されたときにタイムアウトをクリアする
+// chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+//   if (changeInfo.status === "complete") {
+//     if (tab.active) {
+//       resumeTab(tab);
+//     } else {
+//       suspendTab(tab);
+//     }
+//   }
+// });
+
+// [x] タブ自動巡回
+// [x] すべてミュート
+// [x] 対象ウィンドウ限定
+// [x] enable/disable
+// [x] タブサスペンド
+// [x] 重複除外
+// 対象ウィンドウのみ処理
+// 
+// 巡回時間設定
+
 // サスペンドディレイの設定が変更された場合には、拡張機能をリロードするか、すべてのタブを再起動する必要がある
+// 対象ウィンドウのタブだけにサスペンド処理をしたい
+// サスペンドするかどうかを切り替えたい
+// オフラインなら閉じる（オンオフ切り替えも実装）
+// オンライン通知なれば別タブで開きたい
+
+// アクティブタブになったらそのときだけmutaitonobserverを設定、視聴するがでたらリンクを別タブで開く
+// アクティブタブになったとき、そのライブ状況をapiで見て、オフラインなら閉じる
+// [x] 重複なら閉じる
