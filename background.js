@@ -1,7 +1,4 @@
-let lastActiveTabId;
-let lastActiveWindowId;
-
-const SWITCH_INTERVAL = 120000; // タブ切り替え間隔（ミリ秒）
+const SWITCH_INTERVAL = 50000; // タブ切り替え間隔（ミリ秒）
 
 const suspendTimeouts = {};
 
@@ -31,9 +28,6 @@ async function switchTab() {
               // suspend previous tab
               const suspendedUrl = "chrome-extension://" + chrome.runtime.id + "/suspended.html#" + encodeURIComponent(tabs[currentTabIndex].url);
               chrome.tabs.update(tabs[currentTabIndex].id, { url: suspendedUrl });
-
-              // check offline tab and close
-              checkAndCloseOfflineTab(tabs[nextTabIndex]);
 
               // Close duplicate tabs
               const urls = tabs.map(tab => tab.url);
@@ -92,22 +86,27 @@ function clearSuspendTimeout(tabId) {
 }
 
 // タブがアクティブになったときに再開する関数
-function resumeTab(tab) {
+async function resumeTab(tab) {
   // clearSuspendTimeout(tab.id)
-  if (tab.url.startsWith("chrome-extension://" + chrome.runtime.id + "/suspended.html")) {
-    const originalUrl = decodeURIComponent(tab.url.split("#")[1]);
-    chrome.tabs.update(tab.id, { url: originalUrl });
-  }
+  console.log('resumeTab', tab.url);
+
+  if (await checkAndCloseOfflineTab(tab)) {
+    // if online
+    if (tab.url.startsWith("chrome-extension://" + chrome.runtime.id + "/suspended.html")) {
+      console.log('suspendedTab');
+      const originalUrl = decodeURIComponent(tab.url.split("#")[1]);
+      chrome.tabs.update(tab.id, { url: originalUrl, muted: false })
+    }
+  };
 }
 
 // タブのアクティブ状態を監視して、必要に応じてサスペンドと再開を行う
-chrome.tabs.onActivated.addListener(activeInfo => {
-  chrome.tabs.get(activeInfo.tabId, resumeTab);
-
-  // chrome.tabs.query({ active: false, currentWindow: true }, tabs => {
-  // chrome.tabs.query({ active: false }, tabs => {
-  //   tabs.forEach(suspendTab);
-  // });
+chrome.tabs.onActivated.addListener(async activeInfo => {
+  const targetWindowId = await new Promise((resolve) => chrome.storage.sync.get('targetWindowId', ({ targetWindowId }) => resolve(targetWindowId)))
+  if (activeInfo.windowId === targetWindowId) {
+    chrome.tabs.get(activeInfo.tabId, resumeTab);
+    console.log('activated', activeInfo);
+  }
 });
 
 function getUserId(clientId, accessToken, username) {
@@ -132,60 +131,70 @@ function getUserId(clientId, accessToken, username) {
     });
 }
 
-function checkAndCloseOfflineTab(tab) {
+async function checkAndCloseOfflineTab(tab) {
+  console.log('check offline', tab.url);
   if (!tab.url.includes("twitch")) {
+    console.log('tab is not twitch', tab.url);
     return;
   }
+
+  let channelName;
   if (tab.url.includes("extension")) {
-    return;
+    console.log('tab is suspended', tab.url);
+    const splittedUrl = tab.url.split("%2F");
+    channelName = splittedUrl[splittedUrl.length - 1];
+  } else {
+    const splittedUrl = tab.url.split("/");
+    channelName = splittedUrl[splittedUrl.length - 1];
   }
-  const splittedUrl = tab.url.split("/");
-  const channelName = splittedUrl[splittedUrl.length - 1];
+  console.log('channelName', channelName);
 
-  chrome.storage.sync.get(["clientId", "accessToken"], (settings) => {
-    const clientId = settings.clientId;
-    const accessToken = settings.accessToken;
+  const settings = await chrome.storage.sync.get(["clientId", "accessToken"]);
+  const clientId = settings.clientId;
+  const accessToken = settings.accessToken;
 
-    getUserId(clientId, accessToken, channelName).then((userId) => {
-      const requestUrl = `https://api.twitch.tv/helix/streams?user_id=${userId}`;
-      fetch(requestUrl, {
-        headers: {
-          "Client-ID": clientId,
-          "Authorization": `Bearer ${accessToken}`
-        }
-      })
-        .then((response) => response.json())
-        .then((data) => {
-          if (data.data.length > 0) {
-            // Stream is online
-          } else {
-            // offline
-            chrome.tabs.remove(tab.id);
-          }
-        })
-        .catch((error) => {
-          console.error("tabs;", tab.url);
-          console.error("Error fetching stream status:", error);
-        });
-    });
+  const userId = await getUserId(clientId, accessToken, channelName);
+  const requestUrl = `https://api.twitch.tv/helix/streams?user_id=${userId}`;
+  const response = await fetch(requestUrl, {
+    headers: {
+      "Client-ID": clientId,
+      "Authorization": `Bearer ${accessToken}`
+    }
   });
+  const data = await response.json();
+
+  if (data.data.length > 0) {
+    // Stream is online
+    console.log("online", tab.url);
+    return true;
+  } else {
+    // offline
+    console.log("offline", tab.url);
+    chrome.tabs.remove(tab.id);
+    return false;
+  }
 }
 
+// TODO: 一気に5タブ開いてしまう問題を解決したi
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.action === "openNewStream") {
+    const targetWindowId = await new Promise((resolve) => chrome.storage.sync.get('targetWindowId', ({ targetWindowId }) => resolve(targetWindowId)))
     const url = message.value;
     console.log("openNew:", url);
-    const targetWindowId = await new Promise((resolve) =>
-      chrome.storage.sync.get('targetWindowId', ({ targetWindowId }) => resolve(targetWindowId))
-    );
     if (targetWindowId) {
-      console.log(targetWindowId);
-      chrome.tabs.query({ url: url, windowId: targetWindowId }, (tabs) => {
-        if (tabs.length > 0) {
-          // nothing to do
-        } else {
-          chrome.tabs.create({ url: url, windowId: targetWindowId, active: false });
-        }
+      const suspendedUrl = "chrome-extension://" + chrome.runtime.id + "/suspended.html#" + encodeURIComponent(url);
+
+      chrome.tabs.query({ windowId: targetWindowId }, tabs => {
+        const activeTabIndex = tabs.findIndex(tab => tab.active);
+        console.log("Active tab Idx", activeTabIndex);
+        chrome.tabs.query({ url: suspendedUrl, windowId: targetWindowId }, (tabs) => {
+          if (tabs.length > 0) {
+            // nothing to do
+            console.log('duplicate tabs');
+          } else {
+            chrome.tabs.create({ url: suspendedUrl, windowId: targetWindowId, active: false, index: activeTabIndex + 1 });
+          }
+        });
       });
     }
   }
